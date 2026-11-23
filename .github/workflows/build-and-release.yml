@@ -1,0 +1,112 @@
+name: Build and publish Video Subtitle Remover RU (Windows CUDA 11.8)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/build-and-release.yml'
+      - 'overlay/**'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows-nvidia:
+    runs-on: windows-2022
+    timeout-minutes: 180
+    steps:
+      - name: Checkout Russian translation
+        uses: actions/checkout@v4
+        with:
+          path: overlay-repo
+          persist-credentials: false
+
+      - name: Checkout original VSR 1.4.0 source
+        uses: actions/checkout@v4
+        with:
+          repository: YaoFANGUK/video-subtitle-remover
+          ref: e109b9ddc1d0e8f153199dfa05c1d767546906d8
+          path: vsr
+          persist-credentials: false
+
+      - name: Apply Russian interface
+        shell: pwsh
+        run: |
+          Copy-Item overlay-repo/overlay/backend/config.py vsr/backend/config.py -Force
+          Copy-Item overlay-repo/overlay/backend/interface/ru.ini vsr/backend/interface/ru.ini -Force
+          Copy-Item overlay-repo/overlay/gui.py vsr/gui.py -Force
+          Copy-Item overlay-repo/overlay/ui/advanced_setting_interface.py vsr/ui/advanced_setting_interface.py -Force
+
+      - name: Setup Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Check Russian translations
+        shell: bash
+        working-directory: vsr
+        run: |
+          python -m py_compile gui.py backend/config.py ui/advanced_setting_interface.py
+          python -c 'import configparser; e=configparser.ConfigParser();r=configparser.ConfigParser();e.read("backend/interface/en.ini",encoding="utf-8");r.read("backend/interface/ru.ini",encoding="utf-8");assert all(set(e[s]).issubset(r[s]) for s in e.sections());assert "Русский" in open("backend/config.py",encoding="utf-8").read()'
+
+      - name: Install dependencies (official CUDA 11.8 recipe)
+        shell: bash
+        working-directory: vsr
+        run: |
+          python -m pip install paddlepaddle==3.0.0
+          python -m pip install -r requirements.txt
+          python -m pip freeze > requirements.txt
+          python -m pip install torch==2.7.0 torchvision==0.22.0 --index-url https://download.pytorch.org/whl/cu118
+          python -m pip install QPT==1.0b8 setuptools
+
+      - name: Apply upstream QPT compatibility fix
+        shell: bash
+        working-directory: vsr
+        run: |
+          SITE_PACKAGES=$(python -c 'import site,os;print(os.path.join(site.getsitepackages()[0],"Lib","site-packages"))')
+          SITE_PACKAGES_UNIX=$(cygpath -u "$SITE_PACKAGES")
+          sed -i '98c\\        try:\\n            dep = pkg.requires()\\n        except TypeError:\\n            continue' "${SITE_PACKAGES_UNIX}/qpt/kernel/qpackage.py"
+
+      - name: Build executable using the official project packager
+        shell: bash
+        working-directory: vsr
+        env:
+          QPT_Action: 'True'
+        run: |
+          python backend/tools/makedist.py --cuda 11.8
+
+      - name: Verify Windows release contents
+        shell: pwsh
+        run: |
+          if (-not (Test-Path vsr_out/Release/resources/backend/interface/ru.ini)) {
+            throw 'Russian translation missing from release'
+          }
+          if (-not (Test-Path vsr_out/Release/resources/gui.py)) {
+            throw 'Program launcher source missing from release'
+          }
+
+      - name: Free unneeded debug build
+        shell: pwsh
+        run: |
+          if (Test-Path vsr_out/Debug) { Remove-Item -Recurse -Force vsr_out/Debug }
+
+      - name: Compress release into parts below 2 GiB
+        shell: bash
+        run: |
+          cd vsr_out/Release
+          7z a -t7z -mx=7 -v1900m "$GITHUB_WORKSPACE/vsr-1.4.0-ru-nvidia-cuda11.8.7z" *
+          cd "$GITHUB_WORKSPACE"
+          ls -lh vsr-1.4.0-ru-nvidia-cuda11.8.7z.*
+          test -f vsr-1.4.0-ru-nvidia-cuda11.8.7z.001
+
+      - name: Publish public GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create v1.4.0-ru.1 vsr-1.4.0-ru-nvidia-cuda11.8.7z.* \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "Video Subtitle Remover 1.4.0 — русский интерфейс (Windows NVIDIA)" \
+            --notes "Неофициальная русская сборка оригинального проекта YaoFANGUK/video-subtitle-remover. Скачайте все части .7z.001/.002/.003 в одну папку, затем распакуйте .001 через 7-Zip. Windows, NVIDIA CUDA 11.8. Лицензия Apache-2.0."
