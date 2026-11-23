@@ -66,7 +66,7 @@ jobs:
         run: |
           SITE_PACKAGES=$(python -c 'import site,os;print(os.path.join(site.getsitepackages()[0],"Lib","site-packages"))')
           SITE_PACKAGES_UNIX=$(cygpath -u "$SITE_PACKAGES")
-          sed -i '98c\\        try:\\n            dep = pkg.requires()\\n        except TypeError:\\n            continue' "${SITE_PACKAGES_UNIX}/qpt/kernel/qpackage.py"
+          sed -i '98c\        try:\n            dep = pkg.requires()\n        except TypeError:\n            continue' "${SITE_PACKAGES_UNIX}/qpt/kernel/qpackage.py"
 
       - name: Build executable using the official project packager
         shell: bash
